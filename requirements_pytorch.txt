@@ -1,0 +1,29 @@
+# PyTorch requirements for EBM Compositionality
+# Install with: pip install -r requirements_pytorch.txt
+
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.21.0
+pillow>=9.0.0
+
+# Optional but recommended
+tensorboard>=2.11.0  # For logging
+tqdm>=4.64.0  # For progress bars
+matplotlib>=3.5.0  # For visualization
+scipy>=1.9.0  # For scientific computing
+
+# For data loading and preprocessing
+h5py>=3.7.0
+opencv-python>=4.6.0
+
+# For reproducibility
+hydra-core>=1.2.0  # Optional: better config management than FLAGS
+omegaconf>=2.2.0  # Optional: works with hydra
+
+# Development dependencies (optional)
+pytest>=7.2.0
+black>=22.10.0
+flake8>=5.0.0
+mypy>=0.990
+
