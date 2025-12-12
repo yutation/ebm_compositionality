@@ -34,48 +34,64 @@ def langevin_dynamics(models, labels_list, x_init, num_steps=100, step_lr=100.0,
     
     for step in range(num_steps):
         # Add noise
-        x_mod = x_mod + torch.randn_like(x_mod) * 0.005
+        torch_xla.sync()
+        with xp.Trace('step3'):
+            x_mod = x_mod + torch.randn_like(x_mod) * 0.005
+        torch_xla.sync()
         x_mod = x_mod.detach()
         x_mod.requires_grad = True
-        
+
+        torch_xla.sync()
         # Compute energy based on task
-        if task == 'or_figure':
-            # OR composition: -log(exp(-e1) + exp(-e2))
-            e1 = models[0](x_mod, labels_list[0]) + models[1](x_mod, labels_list[1])
-            e2 = models[2](x_mod, labels_list[2]) + models[3](x_mod, labels_list[3])
-            scale = 100
-            
-            # Logsumexp for numerical stability
-            stacked = torch.stack([-e1, -e2], dim=1)  # [B, 2, 1]
-            e_pos = -torch.logsumexp(scale * stacked, dim=1) / scale
-            # Note: original code then overrides with e_pos = e2
-            e_pos = e2
-            
-        elif task == 'negation_figure':
-            # Negation: combine models with negation
-            e_pos = models[0](x_mod, labels_list[0])
-            
-            for i in range(1, len(models)):
-                if i == 1:
-                    e_pos = e_pos - 0.001 * models[i](x_mod, labels_list[i])
-                elif i == 2:
-                    e_pos = e_pos - 0.001 * models[i](x_mod, labels_list[i])
-                else:
-                    e_pos = e_pos + models[i](x_mod, labels_list[i])
-                    
-        else:  # combination_figure (default)
-            # Simple addition of all energies
-            e_pos = 0
-            for i, (model, label) in enumerate(zip(models, labels_list)):
-                e_pos = e_pos + model(x_mod, label)
-        
+        # Note: Step1
+        with xp.Trace('step1'):
+            if task == 'or_figure':
+                # OR composition: -log(exp(-e1) + exp(-e2))
+                
+                e1 = models[0](x_mod, labels_list[0]) + models[1](x_mod, labels_list[1])
+                e2 = models[2](x_mod, labels_list[2]) + models[3](x_mod, labels_list[3])
+                scale = 100
+                
+                # Logsumexp for numerical stability
+                stacked = torch.stack([-e1, -e2], dim=1)  # [B, 2, 1]
+                e_pos = -torch.logsumexp(scale * stacked, dim=1) / scale
+                # Note: original code then overrides with e_pos = e2
+                e_pos = e2
+                
+            elif task == 'negation_figure':
+                # Negation: combine models with negation
+                e_pos = models[0](x_mod, labels_list[0])
+                
+                for i in range(1, len(models)):
+                    if i == 1:
+                        e_pos = e_pos - 0.001 * models[i](x_mod, labels_list[i])
+                    elif i == 2:
+                        e_pos = e_pos - 0.001 * models[i](x_mod, labels_list[i])
+                    else:
+                        e_pos = e_pos + models[i](x_mod, labels_list[i])
+                        
+            else:  # combination_figure (default)
+                # Simple addition of all energies
+                e_pos = 0
+                for i, (model, label) in enumerate(zip(models, labels_list)):
+                    e_pos = e_pos + model(x_mod, label)
+        torch_xla.sync()
         # Compute gradient
         e_pos_sum = e_pos.sum()  # Sum over batch for backward
-        x_grad = torch.autograd.grad(e_pos_sum, x_mod)[0]
+        # Note: Step2
+        torch_xla.sync()
+        with xp.Trace('step2'):
+            x_grad = torch.autograd.grad(e_pos_sum, x_mod)[0]
+        torch_xla.sync()
         
         # Update x with gradient descent
+        # Note: Step4
+        
         with torch.no_grad():
-            x_mod = x_mod - step_lr * x_grad
+            torch_xla.sync()
+            with xp.Trace('step4'):
+                x_mod = x_mod - step_lr * x_grad
+            torch_xla.sync()
             x_mod = torch.clamp(x_mod, 0, 1)
         
         # Mark step for XLA optimization
@@ -91,6 +107,7 @@ def combination_figure(models, labels_list, n=16, num_steps=100, step_lr=100.0, 
         device = xm.xla_device()
     
     # Random initial noise
+    # Note: Step3
     x_noise = torch.rand(n, 3, 128, 128).to(device)
     
     # Run Langevin dynamics
@@ -126,15 +143,16 @@ def conceptcombine(models, labels_list, n=5, num_steps=100, step_lr=100.0, devic
     if device is None:
         device = xm.xla_device()
     
-    factors = 2
+    factors = len(models)
     prod_labels = np.array(list(product(*[[0, 1] for i in range(factors)])))
     print(prod_labels)
-    prod_labels = np.reshape(np.tile(prod_labels[:, None, :], (1, n, 1)), (-1, 2))
+    prod_labels = np.reshape(np.tile(prod_labels[:, None, :], (1, n, 1)), (-1, factors))
     
     # Create label tensors
     labels_list_batch = []
+    num_classes = 2
     for i in range(len(labels_list)):
-        label_tensor = torch.from_numpy(np.eye(2)[prod_labels[:, i]]).float().to(device)
+        label_tensor = torch.from_numpy(np.eye(num_classes)[prod_labels[:, i]]).float().to(device)
         labels_list_batch.append(label_tensor)
     
     # Random initial noise
@@ -156,9 +174,9 @@ if __name__ == "__main__":
     
     # Settings
     num_filters = 64
-    num_steps = 100
+    num_steps = 3
     step_lr = 100.0
-    task = 'combination_figure'  # or 'negation_figure', 'or_figure', 'conceptcombine'
+    task = 'conceptcombine'  # or 'negation_figure', 'or_figure', 'conceptcombine'
     
     # Example: compose 4 models with different attributes
     # Model indices: [old, male, smiling, wavy_hair]
